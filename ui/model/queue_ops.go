@@ -74,9 +74,10 @@ func (m *Model) reverseTracks() (tea.Cmd, error) {
 		m.status.Warning(shuffleReverseWarning, statusTTLShort)
 		return nil, errQueueShuffled
 	}
-	if m.tracksPaging || m.ytdlBatch.loading {
+	if m.tracksPaging || m.ytdlBatch.loading || m.provPane.loading {
 		// Provider pages and yt-dlp batches that arrive later append in
-		// source order.
+		// source order. A provider playlist still loading replaces the
+		// queue, so reversing now would save the previous playlist.
 		m.status.Warning(pagingReverseWarning, statusTTLShort)
 		return nil, errQueuePaging
 	}
