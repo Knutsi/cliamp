@@ -22,6 +22,7 @@ var (
 	errQueueIndex    = errors.New("no track at that index")
 	errQueueShuffled = errors.New("turn off shuffle to move tracks")
 	errQueueDirTrack = errors.New("a directory source supplies the track")
+	errQueuePaging   = errors.New("the playlist is still loading")
 )
 
 // appendTracks adds tracks to the end of the queue and returns the index of
@@ -58,6 +59,42 @@ func (m *Model) moveTrack(from, to int) (tea.Cmd, error) {
 		m.plCursor = to
 	case to:
 		m.plCursor = from
+	}
+	m.recountHeaderState(tracks)
+	m.normalizeQueueOverlay()
+	m.adjustScroll()
+	return m.rearmStalePreload(), nil
+}
+
+// reverseTracks flips the queue order and saves it to the loaded playlist.
+// When the save fails, the queue keeps its order. The playlist cursor stays
+// on its track.
+func (m *Model) reverseTracks() (tea.Cmd, error) {
+	if m.playlist.Shuffled() {
+		m.status.Warning(shuffleReverseWarning, statusTTLShort)
+		return nil, errQueueShuffled
+	}
+	if m.tracksPaging || m.ytdlBatch.loading {
+		// Provider pages and yt-dlp batches that arrive later append in
+		// source order.
+		m.status.Warning(pagingReverseWarning, statusTTLShort)
+		return nil, errQueuePaging
+	}
+	tracks := m.playlist.Tracks()
+	n := len(tracks)
+	if n < 2 {
+		return nil, nil
+	}
+	slices.Reverse(tracks)
+	if err := m.persistLoadedPlaylistOrder(tracks); err != nil {
+		return nil, err
+	}
+	m.playlist.Reverse()
+	if m.plCursor >= 0 && m.plCursor < n {
+		m.plCursor = n - 1 - m.plCursor
+	}
+	if m.writableLoadedPlaylist() == "" {
+		m.status.Show("Reversed playlist order", statusTTLDefault)
 	}
 	m.recountHeaderState(tracks)
 	m.normalizeQueueOverlay()
