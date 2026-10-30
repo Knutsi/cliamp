@@ -50,7 +50,7 @@ func (m *Model) moveTrack(from, to int) (tea.Cmd, error) {
 		return nil, errQueueIndex
 	}
 	tracks[from], tracks[to] = tracks[to], tracks[from]
-	if err := m.persistLoadedPlaylistOrder(tracks); err != nil {
+	if err := m.persistLoadedPlaylistOrder(tracks, pathRowsOf(tracks)); err != nil {
 		return nil, err
 	}
 	m.playlist.Move(from, to)
@@ -74,10 +74,11 @@ func (m *Model) reverseTracks() (tea.Cmd, error) {
 		m.status.Warning(shuffleReverseWarning, statusTTLShort)
 		return nil, errQueueShuffled
 	}
-	if m.tracksPaging || m.ytdlBatch.loading || m.provPane.loading {
+	if m.feedLoading || m.tracksPaging || m.ytdlBatch.loading || m.provPane.loading {
 		// Provider pages and yt-dlp batches that arrive later append in
-		// source order. A provider playlist still loading replaces the
-		// queue, so reversing now would save the previous playlist.
+		// source order. A provider playlist or a feed still loading
+		// replaces the queue, so reversing now would save the previous
+		// playlist.
 		m.status.Warning(pagingReverseWarning, statusTTLShort)
 		return nil, errQueuePaging
 	}
@@ -86,8 +87,12 @@ func (m *Model) reverseTracks() (tea.Cmd, error) {
 	if n < 2 {
 		return nil, nil
 	}
+	// The rows are named before the reverse, so two rows of one path keep
+	// the saved rows they were loaded from.
+	rows := pathRowsOf(tracks)
 	slices.Reverse(tracks)
-	if err := m.persistLoadedPlaylistOrder(tracks); err != nil {
+	slices.Reverse(rows)
+	if err := m.persistLoadedPlaylistOrder(tracks, rows); err != nil {
 		return nil, err
 	}
 	m.playlist.Reverse()
@@ -205,13 +210,19 @@ func pathRowsOf(tracks []playlist.Track) []pathRow {
 // the file does not hold are left out. Each track keeps its saved fields, and
 // a saved duration of 0 takes the duration of the row in order.
 func orderByRows(saved, order []playlist.Track) []playlist.Track {
+	return orderByRowKeys(saved, order, pathRowsOf(order))
+}
+
+// orderByRowKeys is orderByRows with the row of each track of order given
+// in rows, for an edit that knows which saved row each track came from.
+func orderByRowKeys(saved, order []playlist.Track, rows []pathRow) []playlist.Track {
 	at := make(map[pathRow]int, len(saved))
 	for i, row := range pathRowsOf(saved) {
 		at[row] = i
 	}
 	used := make([]bool, len(saved))
 	out := make([]playlist.Track, 0, len(saved))
-	for i, row := range pathRowsOf(order) {
+	for i, row := range rows {
 		j, ok := at[row]
 		if !ok {
 			continue
@@ -233,9 +244,9 @@ func orderByRows(saved, order []playlist.Track) []playlist.Track {
 
 // persistLoadedPlaylistOrder writes the order of queue to the loaded
 // playlist file in one locked update, so a track or a tag that another
-// writer added after the load is kept. It returns the error of a failed
-// save.
-func (m *Model) persistLoadedPlaylistOrder(queue []playlist.Track) error {
+// writer added after the load is kept. rows names the saved row of each
+// track of queue. It returns the error of a failed save.
+func (m *Model) persistLoadedPlaylistOrder(queue []playlist.Track, rows []pathRow) error {
 	name := m.writableLoadedPlaylist()
 	if name == "" {
 		return nil
@@ -252,7 +263,7 @@ func (m *Model) persistLoadedPlaylistOrder(queue []playlist.Track) error {
 		}
 	}
 	err := updater.UpdatePlaylist(name, func(tracks []playlist.Track) ([]playlist.Track, error) {
-		return orderByRows(tracks, queue), nil
+		return orderByRowKeys(tracks, queue, rows), nil
 	})
 	if err != nil {
 		m.status.Errorf(statusTTLDefault, "Save failed: %s", err)
